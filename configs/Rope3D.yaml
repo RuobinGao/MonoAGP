@@ -1,0 +1,45 @@
+random_seed: 444
+
+dataset:
+  type: 'rope3d'
+  root_dir: '/path/to/Rope3D/'
+  batch_size: 16
+  use_3d_center: False
+  crop_with_optical_center: True
+  writelist: ['car','big_vehicle','pedestrian','cyclist']
+  eval_cls: ['car','big_vehicle','pedestrian','cyclist']
+  random_flip: 0.5
+  random_crop: 0.5
+  scale: 0.66
+  shift: 0.1
+  scale_expand : 1.5
+
+model:
+  cls_num: 4
+  multi_bin: True
+  interval_min: [0,30,60,90,120]
+  interval_max: [40,70,100,130,180]
+
+optimizer:
+  type: 'adamW'
+  lr: 0.00125
+  weight_decay: 0.0001
+
+ 
+lr_scheduler:
+  warmup: True
+  decay_rate: 0.1
+  decay_list: [90, 120]
+
+trainer:
+  max_epoch: 150
+  eval_frequency: 1
+  save_frequency: 1
+
+  log_dir: '/path/to/output/rope3d'
+  out_dir: '/path/to/output/rope3d'
+  # resume_model: '/your/path/to/checkpoint.pth'  
+tester:
+  threshold: 0.1
+  out_dir: '/path/to/output/rope3d_eval'
+  resume_model: '/path/to/checkpoint.pth'
