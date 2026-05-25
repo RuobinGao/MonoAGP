@@ -132,6 +132,7 @@ The best results are shown in <b>bold</b>. “--” denotes unavailable results.
 
 
 Our network in the geometric feature extraction branch：
+Green: object regions; white: background regions
 ![geometric feature](./figs/Feature_map_add.png)
 
 Here are the MonoAGP 3cls test results:
