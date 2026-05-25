@@ -1,10 +1,6 @@
 # MonoAGP
 A monocular 3D object detection network framework
 
-Here are the MonoAGP 3cls test results:
-
-![MonoAGP 3 Cls Test Results](./figs/MonoAGP_3cls_test.png)
-
 <h2>Multi-class Results on KITTI Test</h2>
 
 <p>
@@ -133,6 +129,15 @@ The best results are shown in <b>bold</b>. “--” denotes unavailable results.
     </tr>
   </tbody>
 </table>
+
+
+Our network in the geometric feature extraction branch：
+![geometric feature](./figs/Feature_map_add.png)
+
+Here are the MonoAGP 3cls test results:
+
+![MonoAGP 3 Cls Test Results](./figs/MonoAGP_3cls_test.png)
+
 
 
 Here are the MonoAGP car test results (data:20250930):
