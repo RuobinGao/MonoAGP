@@ -1,4 +1,3 @@
-```yaml
 random_seed: 444
 
 dataset:
@@ -143,4 +142,3 @@ tester:
   topk: 50
   out_dir: '/path/to/output/rope3d_eval'
   resume_model: '/path/to/checkpoint.pth'
-```

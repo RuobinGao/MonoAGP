@@ -1,36 +1,42 @@
+```yaml
 random_seed: 444
 
 dataset:
-  type: &dataset_type 'KITTI'
-  root_dir: 'data/KITTIDataset'
+  type: &dataset_type 'rope3d'
+  root_dir: '/path/to/Rope3D/'
   train_split: 'train'
   test_split: 'val'
   batch_size: 16
 
   # Input resolution
-  input_resolution: [384, 1280]
+  input_resolution: [512, 960]
 
-  use_3d_center: True
+  use_3d_center: False
+  crop_with_optical_center: True
+  writelist: ['car','big_vehicle','pedestrian','cyclist']
+  eval_cls: ['car','big_vehicle','pedestrian','cyclist']
   class_merging: False
   use_dontcare: False
-  bbox2d_type: 'anno'  # 'proj' or 'anno'
+  bbox2d_type: 'anno'
   meanshape: False
-  writelist: ['Car']
   clip_2d: False
 
   # Data augmentation
-  aug_pd: True
-  aug_crop: True
   random_flip: 0.5
   random_crop: 0.5
-  scale: 0.05
-  shift: 0.05
+  scale: 0.66
+  shift: 0.1
+  scale_expand : 1.5
   depth_scale: 'normal'
 
 model_name: 'monodetr'
 
 model:
-  num_classes: 3
+  cls_num: 4
+  multi_bin: True
+  interval_min: [0,30,60,90,120]
+  interval_max: [40,70,100,130,180]
+
   return_intermediate_dec: True
   device: 'cuda'
 
@@ -39,14 +45,14 @@ model:
   train_backbone: True
   num_feature_levels: 4
   dilation: False
-  position_embedding: 'sine'  # 'sine' or 'learned'
+  position_embedding: 'sine'
   masks: False
 
   # Depth predictor
   mode: LID
   num_depth_bins: 80
   depth_min: 1e-3
-  depth_max: 60.0
+  depth_max: 180.0
 
   # Transformer
   with_box_refine: True
@@ -78,7 +84,7 @@ model:
   lambda: 0.8
 
   # Dataset-dependent DPP threshold
-  dpp_threshold: 0.5
+  dpp_threshold: 1.0
 
   # Loss
   aux_loss: True
@@ -101,33 +107,40 @@ model:
   set_cost_3dcenter: 10
 
 optimizer:
-  type: 'adamw'
-  lr: 0.0002
+  type: 'adamW'
+  lr: 0.00125
   weight_decay: 0.0001
 
 lr_scheduler:
-  type: 'step'  # 'step' or 'cos'
-  warmup: False
+  warmup: True
   decay_rate: 0.1
-  decay_list: [125, 145]
+  decay_list: [90, 120]
 
 trainer:
-  max_epoch: 155
-  gpu_ids: '0'
+  max_epoch: 150
+  eval_frequency: 1
   save_frequency: 1
-  # resume_model: True
-  # pretrain_model: path/to/ckpt
-  save_path: 'outputs/kitti'
+  gpu_ids: '0'
+
+  log_dir: '/path/to/output/rope3d'
+  out_dir: '/path/to/output/rope3d'
+  save_path: '/path/to/output/rope3d'
   save_all: False
+
   use_dn: False
   scalar: 5
   label_noise_scale: 0.2
   box_noise_scale: 0.4
   num_patterns: 0
 
+  # resume_model: '/your/path/to/checkpoint.pth'
+
 tester:
   type: *dataset_type
-  mode: single  # 'single' or 'all'
-  checkpoint: 155
-  threshold: 0.2  # confidence filter
+  mode: single
+  checkpoint: 150
+  threshold: 0.1
   topk: 50
+  out_dir: '/path/to/output/rope3d_eval'
+  resume_model: '/path/to/checkpoint.pth'
+```
