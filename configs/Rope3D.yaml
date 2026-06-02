@@ -1,18 +1,35 @@
+```yaml
 random_seed: 444
 
 dataset:
-  type: 'rope3d'
+  type: &dataset_type 'rope3d'
   root_dir: '/path/to/Rope3D/'
+  train_split: 'train'
+  test_split: 'val'
   batch_size: 16
+
+  # Input resolution
+  input_resolution: [512, 960]
+
   use_3d_center: False
   crop_with_optical_center: True
   writelist: ['car','big_vehicle','pedestrian','cyclist']
   eval_cls: ['car','big_vehicle','pedestrian','cyclist']
+  class_merging: False
+  use_dontcare: False
+  bbox2d_type: 'anno'
+  meanshape: False
+  clip_2d: False
+
+  # Data augmentation
   random_flip: 0.5
   random_crop: 0.5
   scale: 0.66
   shift: 0.1
   scale_expand : 1.5
+  depth_scale: 'normal'
+
+model_name: 'monodetr'
 
 model:
   cls_num: 4
@@ -20,7 +37,47 @@ model:
   interval_min: [0,30,60,90,120]
   interval_max: [40,70,100,130,180]
 
-  # Geometry-related hyperparameters
+  return_intermediate_dec: True
+  device: 'cuda'
+
+  # Backbone
+  backbone: 'resnet50'
+  train_backbone: True
+  num_feature_levels: 4
+  dilation: False
+  position_embedding: 'sine'
+  masks: False
+
+  # Depth predictor
+  mode: LID
+  num_depth_bins: 80
+  depth_min: 1e-3
+  depth_max: 180.0
+
+  # Transformer
+  with_box_refine: True
+  two_stage: False
+  use_dab: False
+  use_dn: False
+  two_stage_dino: False
+  init_box: False
+  enc_layers: 3
+  dec_layers: 3
+  hidden_dim: 256
+  dim_feedforward: 256
+  dropout: 0.1
+  nheads: 8
+  num_queries: 50
+  enc_n_points: 4
+  dec_n_points: 4
+
+  # DN
+  scalar: 5
+  label_noise_scale: 0.2
+  box_noise_scale: 0.4
+  num_patterns: 0
+
+  # MonoAGP geometry-related hyperparameters
   beta: 0.8
   alpha: 1.0
   delta: 0.6
@@ -28,6 +85,26 @@ model:
 
   # Dataset-dependent DPP threshold
   dpp_threshold: 1.0
+
+  # Loss
+  aux_loss: True
+
+  # Loss coefficients
+  cls_loss_coef: 2
+  focal_alpha: 0.25
+  bbox_loss_coef: 5
+  giou_loss_coef: 2
+  3dcenter_loss_coef: 10
+  dim_loss_coef: 1
+  angle_loss_coef: 1
+  depth_loss_coef: 1
+  depth_map_loss_coef: 1
+
+  # Matcher
+  set_cost_class: 2
+  set_cost_bbox: 5
+  set_cost_giou: 2
+  set_cost_3dcenter: 10
 
 optimizer:
   type: 'adamW'
@@ -43,12 +120,27 @@ trainer:
   max_epoch: 150
   eval_frequency: 1
   save_frequency: 1
+  gpu_ids: '0'
 
   log_dir: '/path/to/output/rope3d'
   out_dir: '/path/to/output/rope3d'
-  # resume_model: '/your/path/to/checkpoint.pth'  
+  save_path: '/path/to/output/rope3d'
+  save_all: False
+
+  use_dn: False
+  scalar: 5
+  label_noise_scale: 0.2
+  box_noise_scale: 0.4
+  num_patterns: 0
+
+  # resume_model: '/your/path/to/checkpoint.pth'
 
 tester:
+  type: *dataset_type
+  mode: single
+  checkpoint: 150
   threshold: 0.1
+  topk: 50
   out_dir: '/path/to/output/rope3d_eval'
   resume_model: '/path/to/checkpoint.pth'
+```
