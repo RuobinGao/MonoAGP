@@ -27,7 +27,7 @@ dataset:
 
   depth_scale: 'normal'
 
-  input_resolution: [384, 1280]
+input_resolution: [384, 1280]
 
 model_name: 'monoagp'
 
