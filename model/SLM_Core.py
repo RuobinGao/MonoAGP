@@ -1,45 +1,64 @@
+import math
+
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 
-class GeometricDepthAwareness(nn.Module):
+class SLM(nn.Module):
+    """Spatial-adaptive lateral modulation in Eqs. (4)-(5)."""
 
-    def __init__(self, alpha=1.0, beta_init=0.10, bias_init=0.0, clamp_min=0.0):
+    def __init__(self, alpha=1.0, beta=0.8, bias=0.0):
         super().__init__()
-        self.alpha = alpha
-        self.beta = nn.Parameter(torch.tensor(float(beta_init)))
-        self.bias = nn.Parameter(torch.tensor(float(bias_init)))
-        self.clamp_min = clamp_min
+        if not all(math.isfinite(float(v)) for v in (alpha, beta, bias)):
+            raise ValueError("alpha, beta, and bias must be finite")
+        if alpha <= 0 or beta < 0:
+            raise ValueError("alpha must be positive and beta must be nonnegative")
 
-    def forward(self, feat, calibs, img_sizes):
+        self.register_buffer("alpha", torch.tensor(float(alpha)))
+        self.register_buffer("beta", torch.tensor(float(beta)))
+        self.register_buffer("bias", torch.tensor(float(bias)))
 
-        B, C, H, W = feat.shape
-        device = feat.device
-        dtype = feat.dtype
+    def forward(self, feat, u_coordinates, principal_x):
+        """
+        Args:
+            feat: feature map with shape [B, C, H, W].
+            u_coordinates: pixel coordinates with shape [W] or [B, W].
+            principal_x: principal-point coordinate, scalar or shape [B].
+        """
+        if feat.ndim != 4:
+            raise ValueError("feat must have shape [B, C, H, W]")
+        if not feat.is_floating_point():
+            raise TypeError("feat must be a floating-point tensor")
 
-        # Principal point u0 = cx in image pixel coordinates
-        u0 = calibs[:, 0, 2].to(dtype=dtype)  # [B]
+        batch, _, height, width = feat.shape
+        dtype = torch.float32 if feat.dtype in (torch.float16, torch.bfloat16) else feat.dtype
+        u = torch.as_tensor(u_coordinates, device=feat.device, dtype=dtype)
+        ox = torch.as_tensor(principal_x, device=feat.device, dtype=dtype)
 
-        # Feature-grid x locations -> image pixel coordinates
-        # center-aligned mapping
-        img_w = img_sizes[:, 0].to(dtype=dtype)  # [B]
-        stride_w = img_w / float(W)              # [B]
+        if u.shape == (width,):
+            u = u.view(1, 1, 1, width)
+        elif u.shape == (batch, width):
+            u = u.view(batch, 1, 1, width)
+        else:
+            raise ValueError("u_coordinates must have shape [W] or [B, W]")
 
-        u_feat = torch.arange(W, device=device, dtype=dtype).view(1, 1, W)  # [1,1,W]
-        u_img = (u_feat + 0.5) * stride_w.view(B, 1, 1)                      # [B,1,W]
+        if ox.ndim == 0:
+            ox = ox.view(1, 1, 1, 1)
+        elif ox.shape == (batch,):
+            ox = ox.view(batch, 1, 1, 1)
+        else:
+            raise ValueError("principal_x must be a scalar or have shape [B]")
 
-        # |u - u0|^alpha
-        offset = torch.abs(u_img - u0.view(B, 1, 1)).pow(self.alpha)         # [B,1,W]
+        alpha = self.alpha.to(device=feat.device, dtype=dtype)
+        beta = self.beta.to(device=feat.device, dtype=dtype)
+        bias = self.bias.to(device=feat.device, dtype=dtype)
+        if beta.item() == 0:
+            modulation = bias.expand(batch, 1, 1, width)
+        else:
+            modulation = bias + beta * torch.abs(u - ox).pow(alpha)
 
-        beta = F.softplus(self.beta)
-        bias = self.bias
-        mod_1d = bias + beta * offset                                         # [B,1,W]
+        modulation = modulation.expand(batch, 1, height, width).to(feat.dtype)
+        return (1.0 + modulation) * feat, modulation
 
-        if self.clamp_min is not None:
-            mod_1d = torch.clamp(mod_1d, min=self.clamp_min)
 
-        mod_map = mod_1d.unsqueeze(2).expand(B, 1, H, W)                      # [B,1,H,W]
-        feat_mod = (1.0 + mod_map) * feat
-
-        return feat_mod, mod_map
+GeometricDepthAwareness = SLM

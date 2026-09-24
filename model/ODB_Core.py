@@ -1,159 +1,85 @@
-# Author: Ruobin Gao
-# Created: 2026-03-23
-
+import math
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
+
+
+def angular_distance(angle, center):
+    delta = angle - center
+    return torch.abs(torch.atan2(torch.sin(delta), torch.cos(delta)))
 
 
 class ODB(nn.Module):
+    """Orientation-aware dimensional balancing in Eqs. (7)-(8)."""
 
-    def __init__(
-        self,
-        delta: float = 0.35,
-        alpha: float = 0.5,
-        gamma=(1.0, 1.0, 1.0),
-        loss_type: str = "l1",
-    ):
+    def __init__(self, lambda_w=0.8, lambda_l=0.8, delta=0.6,
+                 gamma=(1.0, 1.0, 1.0)):
         super().__init__()
-
-        if not (0.0 < alpha <= 1.0):
-            raise ValueError("alpha must satisfy 0 < alpha <= 1")
+        if not (0 < lambda_w <= 1 and 0 < lambda_l <= 1):
+            raise ValueError("lambda_w and lambda_l must be in (0, 1]")
+        if not (0 <= delta < math.pi / 4):
+            raise ValueError("delta must be in [0, pi/4)")
         if len(gamma) != 3:
-            raise ValueError("gamma must have 3 elements for [h, w, l]")
-        if loss_type not in {"l1", "smooth_l1", "l2"}:
-            raise ValueError("loss_type must be one of {'l1', 'smooth_l1', 'l2'}")
+            raise ValueError("gamma must follow the [h, w, l] order")
+        if any(not math.isfinite(float(v)) or float(v) < 0 for v in gamma):
+            raise ValueError("gamma values must be finite and nonnegative")
 
-        self.delta = float(delta)
-        self.alpha = float(alpha)
-        self.loss_type = loss_type
+        self.register_buffer("lambda_w", torch.tensor(float(lambda_w), dtype=torch.float64))
+        self.register_buffer("lambda_l", torch.tensor(float(lambda_l), dtype=torch.float64))
+        self.register_buffer("delta", torch.tensor(float(delta), dtype=torch.float64))
+        self.register_buffer("gamma", torch.tensor(gamma, dtype=torch.float64))
 
-        gamma = torch.as_tensor(gamma, dtype=torch.float32)
-        self.register_buffer("gamma", gamma)
+    def weights(self, theta_gt):
+        """Return dimension weights in [h, w, l] order."""
+        if not theta_gt.is_floating_point():
+            raise TypeError("theta_gt must be a floating-point tensor")
+        d_width = torch.minimum(
+            angular_distance(theta_gt, 0.0),
+            angular_distance(theta_gt, math.pi),
+        )
+        d_length = torch.minimum(
+            angular_distance(theta_gt, math.pi / 2),
+            angular_distance(theta_gt, -math.pi / 2),
+        )
 
-    @staticmethod
-    def wrap_to_pi(angle: torch.Tensor) -> torch.Tensor:
-        # more stable than modulo for tensor angles
-        return torch.atan2(torch.sin(angle), torch.cos(angle))
-
-    def angular_distance(self, a: torch.Tensor, b: torch.Tensor) -> torch.Tensor:
-        return torch.abs(self.wrap_to_pi(a - b))
-
-    def infer_degenerate_dimension(self, theta: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            theta: [...], yaw angle in radians
-
-        Returns:
-            deg_dim: [...], {-1, 1, 2}
-                     -1: no degenerate dimension detected
-                      1: width  is degenerate
-                      2: length is degenerate
-        """
-        theta = self.wrap_to_pi(theta)
-
-        d0   = self.angular_distance(theta, torch.zeros_like(theta))
-        dpi  = self.angular_distance(theta, torch.full_like(theta, torch.pi))
-        dp2  = self.angular_distance(theta, torch.full_like(theta,  torch.pi / 2.0))
-        dnp2 = self.angular_distance(theta, torch.full_like(theta, -torch.pi / 2.0))
-
-        is_w = (d0 <= self.delta) | (dpi <= self.delta)
-        is_l = (dp2 <= self.delta) | (dnp2 <= self.delta)
-
-        deg_dim = torch.full(theta.shape, -1, device=theta.device, dtype=torch.long)
-
-        # normal cases
-        deg_dim[is_w & ~is_l] = 1
-        deg_dim[is_l & ~is_w] = 2
-
-        # overlap case: choose the closer canonical direction
-        both = is_w & is_l
-        if both.any():
-            wdist = torch.minimum(d0, dpi)
-            ldist = torch.minimum(dp2, dnp2)
-            deg_dim[both] = torch.where(
-                wdist[both] <= ldist[both],
-                torch.ones_like(deg_dim[both]),
-                torch.full_like(deg_dim[both], 2),
-            )
-
-        return deg_dim
-
-    def build_weights(self, theta: torch.Tensor):
-        deg_dim = self.infer_degenerate_dimension(theta)
-
-        shape = theta.shape + (3,)
-        weights = torch.ones(shape, device=theta.device, dtype=theta.dtype)
-
-        # gamma_m
-        gamma = self.gamma.to(device=theta.device, dtype=theta.dtype)
-        view_shape = (1,) * theta.ndim + (3,)
-        weights = weights * gamma.view(view_shape)
-
-        # w_m(theta): decay only on the degenerate dimension
+        weights = torch.ones(theta_gt.shape + (3,), device=theta_gt.device,
+                             dtype=theta_gt.dtype)
         weights[..., 1] = torch.where(
-            deg_dim == 1,
-            weights[..., 1] * self.alpha,
+            d_width <= self.delta.to(device=theta_gt.device, dtype=theta_gt.dtype),
+            self.lambda_w.to(device=theta_gt.device, dtype=theta_gt.dtype),
             weights[..., 1],
         )
         weights[..., 2] = torch.where(
-            deg_dim == 2,
-            weights[..., 2] * self.alpha,
+            d_length <= self.delta.to(device=theta_gt.device, dtype=theta_gt.dtype),
+            self.lambda_l.to(device=theta_gt.device, dtype=theta_gt.dtype),
             weights[..., 2],
         )
+        return weights
 
-        # height h is kept unchanged under on-board driving viewpoint
-        return weights, deg_dim
+    def forward(self, pred_dims, target_dims, theta_gt, reduction="mean"):
+        if reduction not in ("none", "sum", "mean"):
+            raise ValueError("reduction must be 'none', 'sum', or 'mean'")
+        if pred_dims.shape != target_dims.shape or pred_dims.shape[-1] != 3:
+            raise ValueError("pred_dims and target_dims must have shape [..., 3]")
+        if not pred_dims.is_floating_point() or not target_dims.is_floating_point():
+            raise TypeError("pred_dims and target_dims must be floating-point tensors")
+        if theta_gt.shape != pred_dims.shape[:-1]:
+            raise ValueError("theta_gt must match the leading dimension shape")
+        if pred_dims.device != target_dims.device or pred_dims.device != theta_gt.device:
+            raise ValueError("all inputs must be on the same device")
+        if pred_dims.dtype != target_dims.dtype or pred_dims.dtype != theta_gt.dtype:
+            raise ValueError("all inputs must have the same dtype")
 
-    def compute_dim_error(self, pred_dims: torch.Tensor, target_dims: torch.Tensor) -> torch.Tensor:
-        if self.loss_type == "l1":
-            return torch.abs(pred_dims - target_dims)
-        elif self.loss_type == "smooth_l1":
-            return F.smooth_l1_loss(pred_dims, target_dims, reduction="none")
-        elif self.loss_type == "l2":
-            # since each dimension is scalar, this is element-wise squared error
-            return (pred_dims - target_dims) ** 2
-        else:
-            raise ValueError(f"Unsupported loss_type: {self.loss_type}")
+        gamma = self.gamma.to(device=pred_dims.device, dtype=pred_dims.dtype)
+        loss = gamma * self.weights(theta_gt).to(pred_dims.dtype)
+        loss = (loss * torch.abs(pred_dims - target_dims)).sum(dim=-1)
 
-    def forward(
-        self,
-        pred_dims: torch.Tensor,
-        target_dims: torch.Tensor,
-        theta_gt: torch.Tensor,
-        reduction: str = "mean",
-        return_details: bool = False,
-    ):
-        if pred_dims.shape != target_dims.shape:
-            raise ValueError("pred_dims and target_dims must have the same shape")
-        if pred_dims.shape[-1] != 3:
-            raise ValueError("The last dimension of pred_dims/target_dims must be 3: [h, w, l]")
-        if pred_dims.shape[:-1] != theta_gt.shape:
-            raise ValueError("theta_gt shape must match pred_dims.shape[:-1]")
-
-        weights, deg_dim = self.build_weights(theta_gt)
-        dim_error = self.compute_dim_error(pred_dims, target_dims)
-
-        weighted_error = weights * dim_error
-        geo_loss = weighted_error.sum(dim=-1)  # sum over [h, w, l]
-
+        if reduction == "none":
+            return loss
+        if reduction == "sum" or loss.numel() == 0:
+            return loss.sum()
         if reduction == "mean":
-            out = geo_loss.mean()
-        elif reduction == "sum":
-            out = geo_loss.sum()
-        elif reduction == "none":
-            out = geo_loss
-        else:
-            raise ValueError("reduction must be one of {'none', 'mean', 'sum'}")
+            return loss.mean()
 
-        if return_details:
-            details = {
-                "weights": weights,
-                "degenerate_dim": deg_dim,
-                "dim_error": dim_error,
-                "weighted_error": weighted_error,
-            }
-            return out, details
 
-        return out
+OrientationAwareDimensionalLoss = ODB
